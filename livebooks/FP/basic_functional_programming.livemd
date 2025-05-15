@@ -1,0 +1,436 @@
+<!-- livebook:{"file_entries":[{"name":"fold.png","type":"attachment"}]} -->
+
+# Basic Functional Programming Tutorial
+
+## Intro
+
+Elixir encourages a functional programming (FP) style. FP allows us to specify behaviour __declaratively__ by focusing on expressing __what__ we want to achieve rather than explicitly specifying __how__ to do it (we let the compiler/interpreter take care of that!).
+
+Elixir's modules `Enum` and `Stream` provide a range of higher-order functions, such as `map`, `filter`, `reduce`, etc., that allow us to perform powerful operations on enumerables (collection types implementing the `Enumerable` protocol) in a very concise, compositional way. By utilizing these functions, we can avoid explicit iteration and mutable state, focusing instead on transforming data declaratively.
+
+The `Enum` module provides a huge range of functions to transform, sort, group, filter and retrieve items from enumerables. Here we will discuss only a few of them. It is worth mentioning that, as an alternative to `Enum`, Elixir provides the `Stream` module which supports 'lazy' operations on enumerables. For more information consult [here](https://elixir-lang.org/getting-started/enumerables-and-streams.html).
+
+## Map Function
+
+The `map` function in the `Enum` (resp. `Stream`) module is used to transform each element of a collection using a provided function. It creates a new collection with the transformed values. Let's see an example:
+
+<!-- livebook:{"break_markdown":true} -->
+
+In this example, we have a list of numbers `[1, 2, 3, 4, 5]`. We use the `Enum.map/2` function to apply the given anonymous (aka. 'lambda') function `fn x -> x * x end` to each element of the list. The result is a new list `squared_numbers` containing the squared values `[1, 4, 9, 16, 25]`. The original list remains unchanged.
+
+```elixir
+numbers = [1, 2, 3, 4, 5]
+squared_numbers = Enum.map(numbers, fn x -> x * x end)
+```
+
+The inner workings of the `map` function depend on the concrete data structure on which it is invoked. Erlang/Elixir provides optimized implementations. For the sake of illustration, in the case of lists, a `map` function can be defined as follows:
+
+```elixir
+defmodule ExImpl1 do
+  def map([], _), do: []
+  def map([h | t], f), do: [f.(h) | map(t, f)]
+end
+
+ExImpl1.map(["this", "is", "a", "list", "of", "strings"], &String.capitalize/1)
+```
+
+__(Notice that we employ above the 'capture' notation `&<function_name>/<arity>` for referencing previously defined functions (Elixir's `String.capitalize/1` function in this case).)__
+
+## Filter Function
+
+The `filter` function in the `Enum` (resp. `Stream`) module allows us to select specific elements from a collection using a provided predicate (a function that returns a boolean). It creates a new collection containing only the elements that satisfy the predicate. Let's see an example:
+
+```elixir
+numbers = [1, 2, 3, 4, 5]
+even_numbers = Enum.filter(numbers, fn x -> rem(x, 2) == 0 end)
+```
+
+In this example, we have a list of numbers `[1, 2, 3, 4, 5]`. We use `Enum.filter/2` to select only the even numbers from the list. The lambda function `fn x -> rem(x, 2) == 0 end` checks whether a number is even by verifying if the remainder of dividing the number by 2 is zero. The result is a new list `even_numbers` containing the even values `[2, 4]`.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Again, for the sake of illustration, an implementation of the `filter` function for lists is provided below:
+
+```elixir
+defmodule ExImpl2 do
+  def filter([], _), do: []
+
+  def filter([h | t], pred) do
+    if pred.(h) do
+      [h | filter(t, pred)]
+    else
+      filter(t, pred)
+    end
+  end
+end
+
+odd_numbers = ExImpl2.filter([1, 2, 3, 4, 5, 6, 7, 8, 9], &(rem(&1, 2) == 1))
+```
+
+__(Notice that we employ above the 'capture' notation `&(...)` for simplified anonymous (lambda) function definitions, where `&n` is a placeholder for the nth argument of the lambda.)__
+
+## Reduce Function
+
+The `reduce` function in the `Enum` module (also known as 'fold') allows us to accumulate values from a collection into a single result. It iterates over the collection, applying a function to each element along with an accumulator value. Let's see an example:
+
+```elixir
+numbers = [1, 2, 3, 4, 5]
+sum = Enum.reduce(numbers, 0, &+/2)
+```
+
+__(Notice that we employ above the 'capture' notation for referencing Elixir's `Kernel.+/2` function.)__
+
+In this example, we have a list of numbers `[1, 2, 3, 4, 5]`. We use `Enum.reduce/3` to calculate the sum of all the numbers in the list. The initial accumulator value is `0`, and the function `Kernel.+/2` (i.e. `fn x, y -> x + y end`, see [eta conversion](https://en.wiktionary.org/wiki/eta_conversion)) defines how the numbers are accumulated. The result is the sum of all the numbers, which is `15`.
+
+<!-- livebook:{"break_markdown":true} -->
+
+We will discuss implementation issues related to the `reduce` function in the section on folds.
+
+## Illustrative Examples
+
+We now demonstrate how the map, reduce, and filter functions can be combined to perform powerful [pipelined](https://elixirschool.com/en/lessons/basics/pipe_operator) transformations and aggregations on collections.
+
+```elixir
+# Calculating the sum of the squared even numbers in a list
+[1, 2, 3, 4, 5]
+|> Enum.filter(fn x -> rem(x, 2) == 0 end)
+|> Enum.map(fn x -> x * x end)
+|> Enum.reduce(0, fn x, acc -> x + acc end)
+|> then(fn x -> "The result of the calculation is:\n [suspense...]\n #{x}!" end)
+|> IO.puts()
+```
+
+In the example above, we start with a list of numbers `[1, 2, 3, 4, 5]`. We use the `Enum.filter/2` function to select only the even numbers. Then, we use `Enum.map/2` to square each (even) number. Then, we use `Enum.reduce/3` to calculate the sum of the (squared even) numbers. The result is the sum of the squared even numbers, which is `20`. Finally, we generate and print suitable output message. Observe here the necessary use of the `Kernel.then/2` [function](https://hexdocs.pm/elixir/1.12/Kernel.html#then/2) to pipe through an anonymous (lambda) function.
+
+```elixir
+# Output the average salary of all scientific staff employees 
+# who have been with the company for more than 5 years. 
+employees = [
+  %{name: "Alice", staff: :scientific, hired: 2016, salary: 60000},
+  %{name: "Bob", staff: :admin, hired: 2019, salary: 55000},
+  %{name: "Claire", staff: :scientific, hired: 2017, salary: 65000},
+  %{name: "David", staff: :admin, hired: 2015, salary: 70000},
+  %{name: "Eve", staff: :scientific, hired: 2020, salary: 50000},
+  %{name: "Fiona", staff: :scientific, hired: 2014, salary: 75000}
+]
+
+average_salary =
+  employees
+  |> Enum.filter(fn
+    %{staff: :scientific, hired: year} -> DateTime.utc_now().year - year > 5
+    _ -> false
+  end)
+  |> Enum.reduce({0, 0}, fn %{salary: salary}, {sum, count} -> {sum + salary, count + 1} end)
+  |> then(fn {sum, count} -> sum / count end)
+```
+
+In this example, we use `Enum.filter/2` to select only the scientific employees who have more than 5 years of service, for this we pass to it a (multi-clause) lambda function that uses pattern matching to return `true` when an employee is scientific staff and has more than 5 years of service, and `false` otherwise.
+
+Next, we use `Enum.reduce/3` to iterate over the filtered employees. The reduction function takes two arguments: the current employee map and a tuple containing the accumulated sum and count. The reduction function `fn %{salary: salary}, {sum, count} -> {sum + salary, count + 1} end` extracts the salary from each employee map and updates the sum by adding the current salary and increments the count by 1.
+
+Finally, we divide the accumulated sum by the count to calculate the average salary using the function literal `fn {sum, count} -> sum / count end`.
+
+Observe that by directly calculating the average within the `reduce` function, we eliminate the need for an additional pipeline step or function call to compute the average separately.
+
+## On the Expressivity of Reduce/Fold
+
+The `reduce` function as presented above is also known as [fold](https://en.wikipedia.org/wiki/Fold_(higher-order_function)) in FP jargon. It is a very important notion in FP due to its great versatility. In fact, it can be used to encode many other functions, including `map` and `filter` (though not in a very optimal way). In the case of lists, _fold_ can be defined in two different ways, namely, as _left-fold_ (`foldl`) and _right-fold_ (`foldr`). Let's see:
+
+```elixir
+defmodule FoldImpl do
+  # left-fold (behaves like Elixir's Enum.reduce on lists)
+  def foldl([], acc, _), do: acc
+  def foldl([h | t], acc, f), do: foldl(t, f.(h, acc), f)
+  # right-fold (behaves like 'reduce' in several other programming languages)
+  def foldr([], acc, _), do: acc
+  def foldr([h | t], acc, f), do: f.(h, foldr(t, acc, f))
+end
+```
+
+Calling the function `Enum.reduce/3` on lists behaves just as `foldl` above. Beware, however, that in several other programming languages involking `reduce` on lists will work rather as `foldr`!
+
+```elixir
+defmodule FPImplTest1 do
+  import FoldImpl
+  # lambda for list constructor (traditionally called 'cons', others use the symbol ':')
+  cons = &[&1 | &2]
+  list = [1, 2, 3, 4, 5, 6]
+
+  # returns a clone of the given list
+  IO.inspect(foldr(list, [], cons))
+  # returns (a clone of) the reversed list
+  IO.inspect(foldl(list, [], cons))
+
+  # adds the elements of the given list
+  IO.inspect(foldr(list, 0, &+/2))
+  # same as before (since + is commutative)
+  IO.inspect(foldl(list, 0, &+/2))
+
+  # multiplies the elements of the given list
+  IO.inspect(foldr(list, 1, &*/2))
+  # same as before (since * is commutative)
+  IO.inspect(foldl(list, 1, &*/2))
+
+  # substracts the elements from left to right...
+  IO.inspect(foldr(list, 0, &-/2))
+  #  ... basically this
+  IO.inspect(1 - (2 - (3 - (4 - (5 - 6)))))
+  # substracts the elements from right to left
+  IO.inspect(foldl(list, 0, &-/2))
+  #  ... basically this
+  IO.inspect(6 - (5 - (4 - (3 - (2 - 1)))))
+end
+```
+
+A lot of operations on lists can be implemented on top of `foldr` resp. `foldl` (though not in the most optimal way!). We can see this in the following illustrative implementations of `map`.
+
+```elixir
+defmodule FPImplTest2 do
+  import FoldImpl
+  # map based upon foldr (should have better performance?)
+  def mapr(list, f) do
+    foldr(list, [], fn x, acc -> [f.(x) | acc] end)
+  end
+
+  # map based upon foldl
+  def mapl(list, f) do
+    foldl(list, [], fn x, acc -> acc ++ [f.(x)] end)
+  end
+end
+
+test_lambda = fn x ->
+  IO.puts("processing #{x}")
+  x * x
+end
+
+# using any of foldr or foldl will do the job in the end (but not in the same way!)
+IO.inspect(FPImplTest2.mapr([1, 2, 3, 4, 5], test_lambda))
+IO.inspect(FPImplTest2.mapl([1, 2, 3, 4, 5], test_lambda))
+```
+
+We show below how several useful operations on lists can be implemented on top of `foldr` (or `foldl`, whatever seems easier since they are interdefinable).
+
+```elixir
+defmodule ListImpl do
+  import FoldImpl
+
+  def map(list, f), do: foldr(list, [], fn e, acc -> [f.(e) | acc] end)
+
+  def flatten(list), do: foldr(list, [], &flatten_accumulate/2)
+
+  # defp means that this is a 'private' function
+  defp flatten_accumulate(e, acc) do
+    if is_list(e) do
+      foldr(e, acc, &flatten_accumulate/2)
+    else
+      [e | acc]
+    end
+  end
+
+  def filter(list, pred),
+    do:
+      foldr(list, [], fn e, acc ->
+        if pred.(e) do
+          [e | acc]
+        else
+          acc
+        end
+      end)
+
+  def split(list, pred), do: foldr(list, {[], []}, &split_accumulate(&1, pred, &2))
+
+  defp split_accumulate(e, pred, {true_acc, false_acc}) do
+    if pred.(e) do
+      {[e | true_acc], false_acc}
+    else
+      {true_acc, [e | false_acc]}
+    end
+  end
+
+  def quicksort(list) do
+    foldr(list, [], fn e, acc ->
+      {smaller, greater} = split(acc, &(&1 < e))
+      smaller ++ [e | greater]
+    end)
+  end
+end
+
+# ["-1-", "-2-", "-3-", "-4-", "-5-"]
+IO.inspect(ListImpl.map([1, 2, 3, 4, 5], &"-#{&1}-"))
+# [1, 2, 3, 4, 5, 6, 7, 8]
+IO.inspect(ListImpl.flatten([1, [2, [3, 4], 5], 6, [7, 8]]))
+# [1, 3, 5]
+IO.inspect(ListImpl.filter([1, "two", 3, "four", 5, "six"], &Kernel.is_number/1))
+# {[2, 4, 6], [1, 3, 5, 7]}
+IO.inspect(ListImpl.split([1, 2, 3, 4, 5, 6, 7], &(rem(&1, 2) == 0)))
+# [1, 1, 2, 3, 4, 5, 5, 6, 9]
+IO.inspect(ListImpl.quicksort([3, 1, 4, 1, 5, 9, 2, 6, 5]))
+```
+
+In fact, we can reuse the previous functions in other data structures that can be seamlessly converted in lists. This is, however, not very performant. In general it is always advisable to employ the corresponding functions in the `Enum` module.
+
+```elixir
+# 45
+IO.inspect(FoldImpl.foldr(Enum.to_list(1..9), 0, &Kernel.+/2))
+# 45
+IO.inspect(Enum.reduce(Enum.to_list(1..9), 0, &Kernel.+/2))
+
+test_map1 = %{a: 1, b: 2, c: 3, d: 4}
+test_lambda1 = fn {_, v}, acc -> v + acc end
+
+# 10
+IO.inspect(FoldImpl.foldr(Enum.to_list(test_map1), 0, test_lambda1))
+# 10
+IO.inspect(Enum.reduce(test_map1, 0, test_lambda1))
+
+test_map2 = %{name: "Joe", salary: 50000, position: "Developer"}
+
+test_lambda2 = fn
+  {:salary, v} -> {:salary, v * 1.5}
+  {:name, n} -> {:name, "Happy #{n}"}
+  e -> e
+end
+
+# [name: "Happy Joe", position: "Developer", salary: 75000.0]
+IO.inspect(ListImpl.map(Enum.to_list(test_map2), test_lambda2))
+# [name: "Happy Joe", position: "Developer", salary: 75000.0]
+IO.inspect(Enum.map(test_map2, test_lambda2))
+```
+
+Observe that in last example above the return value of the function `map` is in both cases a [Keyword list](https://elixir-lang.org/getting-started/keywords-and-maps.html), and thus does not correspond to the kind of input data structure (a `Map` in this case).
+
+## Folds as Catamorphisms
+
+The expression _fold_ is also employed in FP more broadly to refer to a generalized `reduce` function that operates on arbitrary recursively defined data structures. The word _catamorphism_ is sometimes employed in more mathematically-inspired FP texts.
+
+As an illustration, consider again the `foldr` and `foldl` functions. One can view a fold on lists as replacing the _nil_ (`[]`) constructor at the end of the list with a specific value (`acc`), and replacing each _cons_ (`[&1|&2]` or `:`) constructor with a specific function `f`. As discussed before, in the case of lists, these replacements can be carried out in two ways:
+
+<!-- livebook:{"break_markdown":true} -->
+
+![](files/fold.png)
+
+<!-- livebook:{"break_markdown":true} -->
+
+The following images:
+
+* https://upload.wikimedia.org/wikipedia/commons/3/3e/Right-fold-transformation.png
+* https://upload.wikimedia.org/wikipedia/commons/5/5a/Left-fold-transformation.png
+
+illustrate the right and left fold of a list visually. This perspective provides a simple route to designing _fold_ functions on other (algebraic) data structures, like various sorts of trees. One writes a function which recursively replaces the (non-terminal) nodes (e.g. the constructor `:`) with the provided functions, and any (terminal) leaves (e.g. `[]`) with the provided values. Such a function is what is generally referred to as a _catamorphism_ in the literature.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Let us now apply _folds_ to tree-like structures. First consider a simple binary tree data structure represented using tuples:
+
+```elixir
+num_tree =
+  {
+    :node,
+    1,
+    # left child
+    {
+      :node,
+      2,
+      # left child      
+      {:leaf, 4},
+      # right child
+      {:leaf, 5}
+    },
+    # right child
+    {
+      :node,
+      3,
+      # left child      
+      {:leaf, 6},
+      # right child
+      {:leaf, 7}
+    }
+  }
+```
+
+To implement a fold for this tree structure, you can use a recursive function that deconstructs the tree and processes its nodes and leaves using a given function:
+
+```elixir
+defmodule BinaryTree do
+  def fold(tree, node_fun, leaf_fun) do
+    case tree do
+      {:node, value, left, right} ->
+        node_fun.(value, fold(left, node_fun, leaf_fun), fold(right, node_fun, leaf_fun))
+
+      {:leaf, value} ->
+        leaf_fun.(value)
+    end
+  end
+end
+```
+
+Using folds on binary trees allow us to encode many different kinds of problems, for instance:
+
+```elixir
+# Adding the values of all nodes in the previous tree of numbers
+IO.inspect(BinaryTree.fold(num_tree, fn vn, vl, vr -> vn + vl + vr end, fn v -> v end))
+
+# (4 * 5) + (42 / 7)
+arith_tree =
+  {
+    :node,
+    :plus,
+    # left child
+    {
+      :node,
+      :times,
+      # left child      
+      {:leaf, 4},
+      # right child
+      {:leaf, 5}
+    },
+    # right child
+    {
+      :node,
+      :div,
+      # left child      
+      {:leaf, 42},
+      # right child
+      {:leaf, 7}
+    }
+  }
+
+# Evaluating the arithmetic expression tree above by implementing the operations as intended
+arith_impl = %{plus: &(&1 + &2), times: &(&1 * &2), div: &(&1 / &2)}
+# 26.0
+IO.inspect(BinaryTree.fold(arith_tree, fn op, vl, vr -> arith_impl[op].(vl, vr) end, & &1))
+
+# (a and b) or not(c)
+logic_tree =
+  {
+    :node,
+    :or,
+    # left child
+    {
+      :node,
+      :and,
+      # left child      
+      {:leaf, :a},
+      # right child
+      {:leaf, :b}
+    },
+    # right child
+    {
+      :node,
+      :imp,
+      # left child      
+      {:leaf, :c},
+      # right child
+      {:leaf, :F}
+    }
+  }
+
+# Evaluating the logic expression tree above by implementing the operations as intended
+logic_impl = %{or: &(&1 or &2), and: &(&1 and &2), imp: &(not &1 or &2)}
+atom_val = %{a: true, b: false, c: true, F: false, T: true}
+
+# false
+IO.inspect(
+  BinaryTree.fold(logic_tree, fn op, vl, vr -> logic_impl[op].(vl, vr) end, &atom_val[&1])
+)
+```

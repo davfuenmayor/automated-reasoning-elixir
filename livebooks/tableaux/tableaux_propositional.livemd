@@ -1,0 +1,237 @@
+<!-- livebook:{"file_entries":[{"name":"sequents.png","type":"attachment"}]} -->
+
+# Tableaux
+
+```elixir
+Mix.install([
+  {:picosat_elixir, "~> 0.2.3"}
+])
+```
+
+## Propositional Classical Logic (PCL)
+
+```elixir
+defmodule PCL do
+  @emptyset MapSet.new()
+
+  def tableaux(strategy, seq, clause_left \\ @emptyset, clause_right \\ @emptyset) do
+    case seq do
+      ##########################################################
+      # empty sequent: we are finished (branch is "saturated"), return clause (as singleton)
+      {[], []} ->
+        MapSet.new([{clause_left, clause_right}])
+
+      ##########################################################
+      # propositional variable: check whether clause becomes trivially valid (branch is "closed"),
+      # if so, finish by returning no clauses, otherwise add atom to clause and continue
+      {[{:pvar, p} | seq_left], seq_right} ->
+        if MapSet.member?(clause_right, p) do
+          @emptyset
+        else
+          tableaux(strategy, {seq_left, seq_right}, MapSet.put(clause_left, p), clause_right)
+        end
+
+      {seq_left, [{:pvar, p} | seq_right]} ->
+        if MapSet.member?(clause_left, p) do
+          @emptyset
+        else
+          tableaux(strategy, {seq_left, seq_right}, clause_left, MapSet.put(clause_right, p))
+        end
+
+      ##########################################################
+      # constants true resp. false: simplify
+      {[true | seq_left], seq_right} ->
+        tableaux(strategy, {seq_left, seq_right}, clause_left, clause_right)
+
+      {seq_left, [false | seq_right]} ->
+        tableaux(strategy, {seq_left, seq_right}, clause_left, clause_right)
+
+      {_seq_left, [true | _seq_right]} ->
+        @emptyset
+
+      {[false | _seq_left], _seq_right} ->
+        @emptyset
+
+      ##########################################################
+      # negation: swap sides
+      {[{:not, a} | seq_left], seq_right} ->
+        tableaux(strategy, {seq_left, [a | seq_right]}, clause_left, clause_right)
+
+      {seq_left, [{:not, a} | seq_right]} ->
+        tableaux(strategy, {[a | seq_left], seq_right}, clause_left, clause_right)
+
+      ##########################################################
+      # conjunction, disjunction and implication - Part I: non-branching decomposition
+      {[{:and, a, b} | seq_left], seq_right} ->
+        tableaux(strategy, {[a | [b | seq_left]], seq_right}, clause_left, clause_right)
+
+      {seq_left, [{:or, a, b} | seq_right]} ->
+        tableaux(strategy, {seq_left, [a | [b | seq_right]]}, clause_left, clause_right)
+
+      {seq_left, [{:impl, a, b} | seq_right]} ->
+        tableaux(strategy, {[a | seq_left], [b | seq_right]}, clause_left, clause_right)
+
+      ##########################################################
+      # conjunction, disjunction and implication - Part II: branching (according to strategy)           
+      {seq_left, [{:and, a, b} | seq_right]} ->
+        strategy.(
+          {seq_left, [a | seq_right]},
+          {seq_left, [b | seq_right]},
+          clause_left,
+          clause_right
+        )
+
+      {[{:or, a, b} | seq_left], seq_right} ->
+        strategy.(
+          {[a | seq_left], seq_right},
+          {[b | seq_left], seq_right},
+          clause_left,
+          clause_right
+        )
+
+      {[{:impl, a, b} | seq_left], seq_right} ->
+        strategy.(
+          {seq_left, [a | seq_right]},
+          {[b | seq_left], seq_right},
+          clause_left,
+          clause_right
+        )
+    end
+  end
+
+  defp union_branching(seq1, seq2, clause_left, clause_right) do
+    MapSet.union(
+      tableaux(&union_branching/4, seq1, clause_left, clause_right),
+      tableaux(&union_branching/4, seq2, clause_left, clause_right)
+    )
+  end
+
+  defp shortcut_branching(seq1, seq2, clause_left, clause_right) do
+    clauses = tableaux(&shortcut_branching/4, seq1, clause_left, clause_right)
+
+    if clauses != @emptyset do
+      clauses
+    else
+      tableaux(&shortcut_branching/4, seq2, clause_left, clause_right)
+    end
+  end
+
+  def clausify(left, right) do
+    tableaux(&union_branching/4, {[parse(left)], [parse(right)]})
+  end
+
+  def clausify(formula) do
+    tableaux(&union_branching/4, {[], [parse(formula)]})
+  end
+
+  def prove(formula) do
+    countermodel = tableaux(&shortcut_branching/4, {[], [parse(formula)]})
+
+    if countermodel != @emptyset do
+      countermodel |> MapSet.to_list() |> List.first() |> as_model()
+    else
+      true
+    end
+  end
+
+  def sat(formula) do
+    model = tableaux(&shortcut_branching/4, {[parse(formula)], []})
+
+    if model != @emptyset do
+      model |> MapSet.to_list() |> List.first() |> as_model()
+    else
+      false
+    end
+  end
+
+  def as_model({clause_left, clause_right}) do
+    pos = for var <- clause_left, do: {var, true}
+    neg = for var <- clause_right, do: {var, false}
+    pos ++ neg
+  end
+
+  def print_clauses(clauses) do
+    clauses |> MapSet.to_list() |> Enum.map(&as_sequent/1) |> Enum.join(", ")
+  end
+
+  def as_sequent({left, right}) do
+    lhs = left |> MapSet.to_list() |> Enum.map(&Atom.to_string/1) |> Enum.join(", ")
+    rhs = right |> MapSet.to_list() |> Enum.map(&Atom.to_string/1) |> Enum.join(", ")
+    "(#{lhs} ⊢ #{rhs})"
+  end
+
+  def parse({:and, _, [lhs, rhs]}), do: {:and, parse(lhs), parse(rhs)}
+  def parse({:or, _, [lhs, rhs]}), do: {:or, parse(lhs), parse(rhs)}
+  def parse({:~>, _, [lhs, rhs]}), do: {:impl, parse(lhs), parse(rhs)}
+  def parse({:not, _, [expr]}), do: {:not, parse(expr)}
+  def parse(const) when is_boolean(const), do: const
+  def parse(name) when is_atom(name), do: {:pvar, name}
+
+  def parse({:<~>, _, [lhs, rhs]}) do
+    l = parse(lhs)
+    r = parse(rhs)
+    {:and, {:impl, l, r}, {:impl, r, l}}
+  end
+
+  # maps atoms to integers, alphabetically starting with 1
+  def index_variables(clauses) do
+    clauses
+    |> Enum.flat_map(fn {left, right} -> MapSet.to_list(left) ++ MapSet.to_list(right) end)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.with_index(1)
+    |> Map.new()
+  end
+
+  # exports as list-based CNF format 
+  def as_cnf_list(index, clauses) do
+    clauses
+    |> Enum.map(fn {neg, pos} -> Enum.map(neg, &(-index[&1])) ++ Enum.map(pos, &index[&1]) end)
+  end
+
+  # exports as DIMACS CNF format for SAT solvers
+  def as_cnf_dimacs(index, clauses, comments \\ "") do
+    problem =
+      clauses
+      |> Enum.map(fn {neg, pos} ->
+        literals = Enum.map(neg, &(-index[&1])) ++ Enum.map(pos, &index[&1])
+        Enum.join(literals, " ") <> " 0"
+      end)
+      |> Enum.join("\n")
+
+    "c #{comments}\n" <> "p cnf #{map_size(index)} #{MapSet.size(clauses)}\n" <> problem
+  end
+end
+```
+
+```elixir
+import PCL
+```
+
+```elixir
+formula = quote do: ((:a or (:b and :c)) <~> ((:a or :b) and (:a or :c)))
+prove formula
+```
+
+```elixir
+formula = quote do: ((:a or (:b and :c)) <~> ((:a or :b) or (:a or :c)))
+prove formula
+```
+
+```elixir
+formula |> clausify() |> print_clauses()
+```
+
+```elixir
+formula = quote do: not ((:a or :c) and (:a or :c)) ~> (:a or (:b and :c))
+IO.puts (inspect (PCL.prove formula))
+clauses = PCL.clausify formula
+IO.puts (inspect clauses)
+IO.puts PCL.print_clauses(clauses)
+index = PCL.index_variables(clauses)
+cnf= PCL.as_cnf_list(index,clauses)
+IO.puts (inspect cnf)
+IO.puts (inspect PCL.as_cnf_dimacs(index,clauses, "my example"))
+Picosat.solve(cnf)
+
+```

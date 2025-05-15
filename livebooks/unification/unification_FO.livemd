@@ -1,0 +1,192 @@
+# Unification
+
+## First-order
+
+```elixir
+defmodule Unification do
+  # Basic wrapper
+  def unify(eqs) when is_list(eqs), do: unify(eqs, Map.new())
+  def unify({_, _} = eq), do: unify([eq], Map.new())
+  def unify(a, b) when is_tuple(a) and is_tuple(b), do: unify({a, b})
+
+  # Finish 
+  def unify([], subst), do: {:ok, make_idempotent(subst)}
+
+  # Same term: trivially unifiable, drop silently
+  def unify([{t, t} | rest], subst), do: unify(rest, subst)
+
+  # Variable on the lhs: occurrence and collision checks, updates substitution and applies to rest
+  def unify([{{:tvar, x}, term} | rest], subst) do
+    if occurs?(term, x) do
+      {:error, "occurs-check failed for '#{inspect(x)}'"}
+    else
+      previous_value = Map.get(subst, x)
+
+      if previous_value != nil && previous_value != term do
+        {:error, "not unifiable: colliding variable assignments for '#{inspect(x)}'"}
+      else
+        new_subst = Map.put(subst, x, term)
+        term_subst = as_term_subst(new_subst)
+        new_rest = Enum.map(rest, fn {l, r} -> {term_subst.(l), term_subst.(r)} end)
+        unify(new_rest, new_subst)
+      end
+    end
+  end
+
+  # Variable on the rhs: reverse equation
+  def unify([{term, {:tvar, x}} | rest], subst), do: unify([{{:tvar, x}, term} | rest], subst)
+
+  # Function application: decompose recursively
+  def unify([{{:app, f1, args1}, {:app, f2, args2}} | rest], subst)
+      when f1 == f2 and length(args1) == length(args2) do
+    unify(Enum.zip(args1, args2) ++ rest, subst)
+  end
+
+  # No match: error
+  def unify(x, _subst), do: {:error, "not unifiable: expression '#{inspect(x)}' didn't match"}
+
+  # Whether a variable occurs in a term
+  def occurs?({:tvar, v}, x), do: v == x
+  def occurs?({:app, _f, args}, x), do: Enum.any?(args, &occurs?(&1, x))
+
+  # Applies a substitution to a term
+  def substitute({:tvar, x} = v, subst), do: subst[x] || v
+  def substitute({:app, f, args}, subst), do: {:app, f, Enum.map(args, &substitute(&1, subst))}
+
+  # Converts into an idempotent substitution (via fixed-point construction)
+  def make_idempotent(subst) do
+    term_subst = as_term_subst(subst)
+    term_subst2 = compose_fun(term_subst, term_subst)
+    subst2 = as_var_subst(term_subst2, Map.keys(subst))
+    if subst == subst2, do: subst, else: make_idempotent(subst2)
+  end
+
+  # Composes two functions f1 and f2 as: f1 ; f2 (or f2 o f1). Read "f2 after f1"
+  def compose_fun(f1, f2), do: fn x -> f2.(f1.(x)) end
+
+  # Converts a term-substitution function into a variable-substitution map (wrt. variable-keys)
+  def as_var_subst(term_subst, vars),
+    do: Map.new(Enum.zip(vars, Enum.map(vars, compose_fun(fn v -> {:tvar, v} end, term_subst))))
+
+  # Converts a variable-substitution map into a term-substitution function
+  def as_term_subst(subst), do: fn t -> substitute(t, subst) end
+
+  # Parses Elixir AST as a term (or term pair)
+  def parse({:=, _, [l, r]}), do: {parse(l), parse(r)}
+  def parse(name) when is_atom(name), do: {:tvar, name}
+  def parse({c, _, Elixir}), do: {:app, c, []}
+  def parse({f, _, args}) when is_list(args), do: {:app, f, Enum.map(args, &parse/1)}
+
+  # Pretty-prints function application
+  def print_term({:app, f, args}) do
+    if length(args) == 0 do
+      to_string(f)
+    else
+      "#{to_string(f)}(#{args |> Enum.map(&print_term/1) |> Enum.join(",")})"
+    end
+  end
+
+  # Pretty-prints variables
+  def print_term({:tvar, name}), do: to_string(name)
+  def print_term(term), do: to_string(term)
+
+  # Pretty-prints substitution
+  def print_substitution(subst) do
+    subst |> Map.to_list() |> Enum.map(fn {v, t} -> "#{print_term(v)} ↦ #{print_term(t)}" end)
+  end
+end
+```
+
+```elixir
+import Unification
+```
+
+```elixir
+{:ok, subst} = unify (parse quote do: :x = :f)
+print_substitution(subst)
+```
+
+```elixir
+eq1 = parse quote do: g(:x2) = :x1
+eq2 = parse quote do: f(:x1, h(:x1), :x2) = f(g(:x3), :x4, :x3)
+{:ok, subst} = unify([eq1,eq2])
+print_substitution(subst)
+```
+
+Below some tests from Wikipedia: https://en.wikipedia.org/wiki/Unification_(computer_science)#Examples_of_syntactic_unification_of_first-order_terms
+
+```elixir
+{:ok, subst} = unify(parse quote do: a = a)
+print_substitution(subst)
+```
+
+```elixir
+{:error, _} = unify(parse quote do: a = b)
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: :x = :x)
+print_substitution(subst)
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: a = :x)
+print_substitution(subst)
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: :x = :y)
+print_substitution(subst)
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: f(a,:x) = f(a,b))
+print_substitution(subst)
+```
+
+```elixir
+{:error, _} = unify(parse quote do: f(a) = g(a))
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: f(:x) = f(:y))
+print_substitution(subst)
+```
+
+```elixir
+{:error, _} = unify(parse quote do: f(:x) = f(:y,:z))
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: f(g(:x)) = f(:y))
+print_substitution(subst)
+```
+
+```elixir
+{:ok, subst} = unify(parse quote do: f(g(:x),:x) = f(:y,a))
+print_substitution(subst)
+```
+
+```elixir
+{:error, _} = unify(parse quote do: :x = f(:x))
+```
+
+```elixir
+eq1 = parse quote do: :x = :y
+eq2 = parse quote do: :a = :y
+{:ok, subst} = unify([eq1,eq2])
+print_substitution(subst)
+```
+
+```elixir
+eq1 = parse quote do: :x = a
+eq2 = parse quote do: b = :x
+{:error, _} = unify([eq1,eq2])
+```
+
+```elixir
+eq1 = parse quote do: :x = a
+eq2 = parse quote do: :x = :y
+{:ok, subst} = unify([eq1,eq2])
+print_substitution(subst)
+```
